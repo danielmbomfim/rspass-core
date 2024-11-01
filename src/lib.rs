@@ -4,6 +4,7 @@ use rand::distributions::Alphanumeric;
 use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
 use rand::Rng;
+use std::fs::create_dir_all;
 use std::io::Write;
 use std::path::PathBuf;
 use std::{fs::File, io};
@@ -112,6 +113,15 @@ pub fn insert_credential(
     })?;
 
     let file_path = repo_path.join(name);
+
+    create_dir_all(file_path.as_path().parent().unwrap()).map_err(|err| match err.kind() {
+        io::ErrorKind::PermissionDenied => Error::new(
+            ErrorKind::PermissionDenied,
+            "You dont have permission to create the a subdirectory",
+        ),
+        _ => panic!("Unexpected error while creating credentials directories"),
+    })?;
+
     let mut file = File::create_new(&file_path).map_err(|err| match err.kind() {
         io::ErrorKind::AlreadyExists => Error::new(
             ErrorKind::AlreadyExists,
