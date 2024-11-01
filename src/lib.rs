@@ -1,13 +1,38 @@
-use rand::distributions::Alphanumeric;
-use rand::prelude::SliceRandom;
-use rand::Rng;
-use std::fs::File;
-use std::io::Write;
-use std::path::PathBuf;
-
 use dirs::home_dir;
 use git2::{Repository, Signature};
+use rand::distributions::Alphanumeric;
+use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
+use rand::Rng;
+use std::io::Write;
+use std::path::PathBuf;
+use std::{fs::File, io};
+
+#[derive(Debug)]
+pub enum ErrorKind {
+    InitializationError,
+    PermissionDenied,
+    NotInitialized,
+    InsertionError,
+    AlreadyExists,
+}
+
+#[derive(Debug)]
+pub struct Error {
+    pub kind: ErrorKind,
+    pub message: String,
+}
+
+impl Error {
+    pub fn new(kind: ErrorKind, message: impl Into<String>) -> Self {
+        Error {
+            kind,
+            message: message.into(),
+        }
+    }
+}
+
+type Result<T> = std::result::Result<T, Error>;
 
 fn get_repo_path() -> PathBuf {
     home_dir()
@@ -17,14 +42,6 @@ fn get_repo_path() -> PathBuf {
         } else {
             "rspass"
         })
-}
-
-pub fn initialize_repository() {
-    let folder = get_repo_path();
-
-    Repository::init(&folder).expect("Failed to initialize git repository");
-
-    println!("Git repository initialized at {}", folder.to_str().unwrap());
 }
 
 pub fn generate_password(length: usize) -> String {
@@ -57,23 +74,55 @@ pub fn generate_password(length: usize) -> String {
 
     let password = password_chars.into_iter().collect();
 
-    println!("random password with {length} characters generated");
-
     password
 }
 
-pub fn insert_credential(name: &str, password: &str, metadata: Option<Vec<(String, String)>>) {
+pub fn initialize_repository() -> Result<String> {
+    let folder = get_repo_path();
+
+    Repository::init(&folder).map_err(|_err| {
+        Error::new(
+            ErrorKind::InitializationError,
+            "failed to initialize repository",
+        )
+    })?;
+
+    Ok(folder.to_str().unwrap().to_owned())
+}
+
+pub fn insert_credential(
+    name: &str,
+    password: &str,
+    metadata: Option<Vec<(String, String)>>,
+) -> Result<()> {
     let repo_path = get_repo_path();
 
-    let repository = Repository::open(&repo_path)
-        .expect("failed to open repository, make sure you have called \"init\".");
+    let repository = Repository::open(&repo_path).map_err(|_err| {
+        Error::new(
+            ErrorKind::NotInitialized,
+            "failed to create initial repository",
+        )
+    })?;
 
-    let mut index = repository
-        .index()
-        .expect("failed to obtain repository index");
+    let mut index = repository.index().map_err(|_err| {
+        Error::new(
+            ErrorKind::InsertionError,
+            "Failed to obtain repository index",
+        )
+    })?;
 
     let file_path = repo_path.join(name);
-    let mut file = File::create(&file_path).expect("failed to create credential");
+    let mut file = File::create_new(&file_path).map_err(|err| match err.kind() {
+        io::ErrorKind::AlreadyExists => Error::new(
+            ErrorKind::AlreadyExists,
+            "A credential already exists with this name",
+        ),
+        io::ErrorKind::PermissionDenied => Error::new(
+            ErrorKind::PermissionDenied,
+            "You dont have permission to edit the repository",
+        ),
+        _ => panic!("Unexpected error while creating credentials file"),
+    })?;
 
     file.write(password.as_bytes())
         .expect("failed to write credentials");
@@ -109,4 +158,6 @@ pub fn insert_credential(name: &str, password: &str, metadata: Option<Vec<(Strin
             parent_commit.iter().collect::<Vec<_>>().as_slice(),
         )
         .unwrap();
+
+    Ok(())
 }
