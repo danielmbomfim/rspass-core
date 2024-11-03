@@ -1,19 +1,22 @@
-use dirs::home_dir;
+use dirs::{config_dir, home_dir};
 use git2::{Repository, Signature};
 use rand::distributions::Alphanumeric;
 use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
 use rand::Rng;
-use std::fs::create_dir_all;
+use std::fs::{create_dir, create_dir_all};
 use std::io::Write;
 use std::path::PathBuf;
 use std::{fs::File, io};
+
+mod pgp;
 
 #[derive(Debug)]
 pub enum ErrorKind {
     InitializationError,
     PermissionDenied,
     NotInitialized,
+    BadConfig,
     InsertionError,
     AlreadyExists,
 }
@@ -43,6 +46,10 @@ fn get_repo_path() -> PathBuf {
         } else {
             "rspass"
         })
+}
+
+fn get_config_path() -> PathBuf {
+    config_dir().unwrap().join("rspass")
 }
 
 pub fn generate_password(length: usize) -> String {
@@ -78,6 +85,38 @@ pub fn generate_password(length: usize) -> String {
     password
 }
 
+pub fn generate_keys(name: &str, email: &str, password: &str) -> Result<String> {
+    let config_dir = get_config_path();
+
+    match create_dir(&config_dir) {
+        Ok(_) => {
+            let (pub_key, private_key) = pgp::generate_key(name, email, password)?;
+
+            File::create_new(config_dir.clone().join("rspass.pub"))
+                .unwrap()
+                .write_all(pub_key.as_bytes())
+                .unwrap();
+
+            File::create_new(config_dir.clone().join("rspass.key"))
+                .unwrap()
+                .write_all(private_key.as_bytes())
+                .unwrap();
+        }
+        Err(err) => match err.kind() {
+            io::ErrorKind::AlreadyExists => {}
+            io::ErrorKind::PermissionDenied => {
+                return Err(Error::new(
+                    ErrorKind::PermissionDenied,
+                    "You dont have permission to create the config folder",
+                ));
+            }
+            _ => panic!("failed to create config folder"),
+        },
+    };
+
+    Ok(config_dir.to_str().unwrap().to_owned())
+}
+
 pub fn initialize_repository() -> Result<String> {
     let folder = get_repo_path();
 
@@ -101,7 +140,7 @@ pub fn insert_credential(
     let repository = Repository::open(&repo_path).map_err(|_err| {
         Error::new(
             ErrorKind::NotInitialized,
-            "failed to create initial repository",
+            "failed to access repository. Make sure to initialize a valid repository",
         )
     })?;
 
@@ -117,7 +156,7 @@ pub fn insert_credential(
     create_dir_all(file_path.as_path().parent().unwrap()).map_err(|err| match err.kind() {
         io::ErrorKind::PermissionDenied => Error::new(
             ErrorKind::PermissionDenied,
-            "You dont have permission to create the a subdirectory",
+            "You dont have permission to create a subdirectory",
         ),
         _ => panic!("Unexpected error while creating credentials directories"),
     })?;
