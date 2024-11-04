@@ -1,5 +1,6 @@
 use dirs::{config_dir, home_dir};
 use git2::{Repository, Signature};
+use pgp::{recover_pub_key, Keys};
 use rand::distributions::Alphanumeric;
 use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
@@ -19,6 +20,8 @@ pub enum ErrorKind {
     BadConfig,
     InsertionError,
     AlreadyExists,
+    EncryptationError,
+    DecryptationError,
 }
 
 #[derive(Debug)]
@@ -90,7 +93,11 @@ pub fn generate_keys(name: &str, email: &str, password: &str) -> Result<String> 
 
     match create_dir(&config_dir) {
         Ok(_) => {
-            let (pub_key, private_key) = pgp::generate_key(name, email, password)?;
+            let Keys {
+                pub_key,
+                private_key,
+                rsa_pub_key,
+            } = pgp::generate_key(name, email, password)?;
 
             File::create_new(config_dir.clone().join("rspass.pub"))
                 .unwrap()
@@ -100,6 +107,11 @@ pub fn generate_keys(name: &str, email: &str, password: &str) -> Result<String> 
             File::create_new(config_dir.clone().join("rspass.key"))
                 .unwrap()
                 .write_all(private_key.as_bytes())
+                .unwrap();
+
+            File::create_new(config_dir.clone().join("rspass.pem"))
+                .unwrap()
+                .write_all(rsa_pub_key.as_bytes())
                 .unwrap();
         }
         Err(err) => match err.kind() {
@@ -161,6 +173,9 @@ pub fn insert_credential(
         _ => panic!("Unexpected error while creating credentials directories"),
     })?;
 
+    let pub_key = recover_pub_key()?;
+    let mut file_data = String::new();
+
     let mut file = File::create_new(&file_path).map_err(|err| match err.kind() {
         io::ErrorKind::AlreadyExists => Error::new(
             ErrorKind::AlreadyExists,
@@ -173,15 +188,16 @@ pub fn insert_credential(
         _ => panic!("Unexpected error while creating credentials file"),
     })?;
 
-    file.write(password.as_bytes())
-        .expect("failed to write credentials");
+    file_data.push_str(password);
 
     if let Some(data) = metadata {
         data.iter().for_each(|(key, value)| {
-            file.write(format!("\n{key}={value}").as_bytes())
-                .expect("failed to write metadata");
+            file_data.push_str(format!("\n{key}={value}").as_str());
         });
     }
+
+    file.write_all(pgp::encrypt(file_data, pub_key)?.as_ref())
+        .expect("failed to write credentials");
 
     index
         .add_path(&PathBuf::from(name))
