@@ -228,7 +228,7 @@ pub fn insert_credential(
     Ok(())
 }
 
-pub fn get_credential(name: &str, password: &str) -> Result<String> {
+pub fn get_credential(name: &str, password: &str, full: bool) -> Result<String> {
     let private_key = recover_private_key()?;
 
     let path = get_repo_path().join(name);
@@ -250,5 +250,11 @@ pub fn get_credential(name: &str, password: &str) -> Result<String> {
             _ => panic!("unexpected error while reading credential"),
         })?;
 
-    decrypt(buffer, password, private_key)
+    let credentials = decrypt(buffer, password, private_key)?;
+
+    if full {
+        Ok(credentials)
+    } else {
+        Ok(credentials.lines().next().unwrap().to_owned())
+    }
 }

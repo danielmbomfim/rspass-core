@@ -73,6 +73,7 @@ pub(crate) fn generate_key(name: &str, email: &str, password: &str) -> Result<Ke
     })
 }
 
+#[allow(dead_code)]
 pub(crate) fn recover_pub_key() -> Result<String> {
     let config_dir = super::get_config_path();
     let mut pub_key = String::new();
