@@ -3,7 +3,7 @@ use std::{fs::File, io::Read};
 use chrono::Utc;
 use pgp::{
     types::{SecretKeyRepr, SecretKeyTrait},
-    ArmorOptions, KeyType, SecretKeyParamsBuilder,
+    ArmorOptions, Deserializable, KeyType, SecretKeyParamsBuilder, SignedSecretKey,
 };
 use rand::{rngs::OsRng, thread_rng};
 use rsa::{
@@ -98,6 +98,31 @@ pub(crate) fn recover_pub_key() -> Result<String> {
     Ok(pub_key)
 }
 
+pub(crate) fn recover_private_key() -> Result<String> {
+    let config_dir = super::get_config_path();
+    let mut private_key = String::new();
+
+    File::open(config_dir.join("rspass.key"))
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => {
+                Error::new(ErrorKind::NotInitialized, "Private key not found")
+            }
+            std::io::ErrorKind::InvalidData => {
+                Error::new(ErrorKind::BadConfig, "Invalid private key")
+            }
+            _ => panic!("Unexpected error when opening private key"),
+        })?
+        .read_to_string(&mut private_key)
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::InvalidData => {
+                Error::new(ErrorKind::BadConfig, "Invalid private key")
+            }
+            _ => panic!("Unexpected error when reading private key"),
+        })?;
+
+    Ok(private_key)
+}
+
 pub(crate) fn recover_rsa_pub_key() -> Result<String> {
     let config_dir = super::get_config_path();
 
@@ -135,4 +160,28 @@ pub(crate) fn encrypt(value: String, pub_key: String) -> Result<Vec<u8>> {
         .unwrap();
 
     Ok(encrypted_data)
+}
+
+pub(crate) fn decrypt(value: Vec<u8>, passprase: &str, private_key: String) -> Result<String> {
+    let (private_key, _) =
+        SignedSecretKey::from_string(&private_key).expect("value should be a valid private key");
+
+    let decrypted_data = private_key
+        .unlock(
+            || passprase.to_owned(),
+            |key| match key {
+                SecretKeyRepr::RSA(key) => key
+                    .decrypt(rsa::Pkcs1v15Encrypt, &value)
+                    .map_err(|err| pgp::errors::Error::RSAError(err)),
+                _ => panic!("unexpected params type {key:?}"),
+            },
+        )
+        .map_err(|_err| {
+            Error::new(
+                ErrorKind::DecryptationError,
+                "failed to decrypt data".to_owned(),
+            )
+        })?;
+
+    Ok(String::from_utf8(decrypted_data).unwrap())
 }

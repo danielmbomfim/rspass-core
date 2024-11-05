@@ -1,12 +1,12 @@
 use dirs::{config_dir, home_dir};
 use git2::{Repository, Signature};
-use pgp::{recover_rsa_pub_key, Keys};
+use pgp::{decrypt, recover_private_key, recover_rsa_pub_key, Keys};
 use rand::distributions::Alphanumeric;
 use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
 use rand::Rng;
 use std::fs::{create_dir, create_dir_all};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::{fs::File, io};
 
@@ -226,4 +226,29 @@ pub fn insert_credential(
         .unwrap();
 
     Ok(())
+}
+
+pub fn get_credential(name: &str, password: &str) -> Result<String> {
+    let private_key = recover_private_key()?;
+
+    let path = get_repo_path().join(name);
+    let mut buffer = Vec::new();
+
+    File::open(&path)
+        .map_err(|err| match err.kind() {
+            io::ErrorKind::NotFound => Error::new(
+                ErrorKind::NotFound,
+                format!("no credential found for {:?}", path).as_str(),
+            ),
+            _ => panic!("unexpected error while reading credential"),
+        })?
+        .read_to_end(&mut buffer)
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::InvalidData => {
+                Error::new(ErrorKind::BadConfig, "Invalid credential data")
+            }
+            _ => panic!("unexpected error while reading credential"),
+        })?;
+
+    decrypt(buffer, password, private_key)
 }
