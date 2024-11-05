@@ -98,6 +98,32 @@ pub(crate) fn recover_pub_key() -> Result<String> {
     Ok(pub_key)
 }
 
+pub(crate) fn recover_rsa_pub_key() -> Result<String> {
+    let config_dir = super::get_config_path();
+
+    let mut rsa_key = String::new();
+
+    File::open(config_dir.join("rspass.pem"))
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::NotFound => {
+                Error::new(ErrorKind::NotInitialized, "Public RSA key not found")
+            }
+            std::io::ErrorKind::InvalidData => {
+                Error::new(ErrorKind::BadConfig, "Invalid RSA public key")
+            }
+            _ => panic!("Unexpected error when opening public RSA key"),
+        })?
+        .read_to_string(&mut rsa_key)
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::InvalidData => {
+                Error::new(ErrorKind::BadConfig, "Invalid RSA public key")
+            }
+            _ => panic!("Unexpected error when reading RSA public key"),
+        })?;
+
+    Ok(rsa_key)
+}
+
 pub(crate) fn encrypt(value: String, pub_key: String) -> Result<Vec<u8>> {
     let pub_key =
         RsaPublicKey::from_pkcs1_pem(&pub_key).expect("value should be a valid public key");

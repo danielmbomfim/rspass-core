@@ -1,6 +1,6 @@
 use dirs::{config_dir, home_dir};
 use git2::{Repository, Signature};
-use pgp::{recover_pub_key, Keys};
+use pgp::{recover_rsa_pub_key, Keys};
 use rand::distributions::Alphanumeric;
 use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
@@ -22,6 +22,7 @@ pub enum ErrorKind {
     AlreadyExists,
     EncryptationError,
     DecryptationError,
+    NotFound,
 }
 
 #[derive(Debug)]
@@ -173,7 +174,7 @@ pub fn insert_credential(
         _ => panic!("Unexpected error while creating credentials directories"),
     })?;
 
-    let pub_key = recover_pub_key()?;
+    let pub_key = recover_rsa_pub_key()?;
     let mut file_data = String::new();
 
     let mut file = File::create_new(&file_path).map_err(|err| match err.kind() {
