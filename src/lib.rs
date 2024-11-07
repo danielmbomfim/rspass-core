@@ -5,8 +5,9 @@ use rand::distributions::Alphanumeric;
 use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
 use rand::Rng;
-use std::fs::{create_dir, create_dir_all};
-use std::io::{Read, Write};
+use std::collections::HashMap;
+use std::fs::{create_dir, create_dir_all, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::{fs::File, io};
 
@@ -54,6 +55,20 @@ fn get_repo_path() -> PathBuf {
 
 fn get_config_path() -> PathBuf {
     config_dir().unwrap().join("rspass")
+}
+
+fn get_credential_file(path: &PathBuf, write_mode: bool) -> Result<File> {
+    OpenOptions::new()
+        .read(true)
+        .write(write_mode)
+        .open(path)
+        .map_err(|err| match err.kind() {
+            io::ErrorKind::NotFound => Error::new(
+                ErrorKind::NotFound,
+                format!("no credential found for {:?}", path).as_str(),
+            ),
+            _ => panic!("unexpected error while reading credential"),
+        })
 }
 
 pub fn generate_password(length: usize) -> String {
@@ -234,14 +249,7 @@ pub fn get_credential(name: &str, password: &str, full: bool) -> Result<String> 
     let path = get_repo_path().join(name);
     let mut buffer = Vec::new();
 
-    File::open(&path)
-        .map_err(|err| match err.kind() {
-            io::ErrorKind::NotFound => Error::new(
-                ErrorKind::NotFound,
-                format!("no credential found for {:?}", path).as_str(),
-            ),
-            _ => panic!("unexpected error while reading credential"),
-        })?
+    get_credential_file(&path, false)?
         .read_to_end(&mut buffer)
         .map_err(|err| match err.kind() {
             std::io::ErrorKind::InvalidData => {
@@ -257,4 +265,108 @@ pub fn get_credential(name: &str, password: &str, full: bool) -> Result<String> 
     } else {
         Ok(credentials.lines().next().unwrap().to_owned())
     }
+}
+
+pub fn edit_credential(
+    name: &str,
+    gpg_password: &str,
+    password: Option<&str>,
+    metadata: Option<Vec<(String, Option<String>)>>,
+) -> Result<()> {
+    let repo_path = get_repo_path();
+    let file_path = repo_path.join(name);
+    let mut buffer = Vec::new();
+    let mut new_credential = String::new();
+    let mut file = get_credential_file(&file_path, true)?;
+
+    file.read_to_end(&mut buffer)
+        .map_err(|err| match err.kind() {
+            std::io::ErrorKind::InvalidData => {
+                Error::new(ErrorKind::BadConfig, "Invalid credential data")
+            }
+            _ => panic!("unexpected error while reading credential"),
+        })?;
+
+    let pub_key = recover_rsa_pub_key()?;
+    let private_key = recover_private_key()?;
+    let credential = decrypt(buffer, gpg_password, private_key)?;
+
+    match password {
+        Some(pass) => new_credential.push_str(pass),
+        None => new_credential.push_str(credential.lines().next().unwrap()),
+    };
+
+    let mut data: HashMap<String, String> = credential
+        .lines()
+        .filter_map(|line| {
+            let mut split = line.splitn(2, '=');
+            let key = split.next()?.to_owned();
+            let value = split.next()?.to_owned();
+            Some((key, value))
+        })
+        .collect();
+
+    if let Some(metadata) = metadata {
+        metadata.into_iter().for_each(|item| {
+            let (key, value) = item;
+
+            match value {
+                Some(inner_value) => {
+                    data.insert(key, inner_value);
+                }
+                None => {
+                    data.remove(key.as_str());
+                }
+            };
+        });
+    }
+
+    data.iter().for_each(|(key, value)| {
+        new_credential.push_str(&format!("\n{}={}", key, value));
+    });
+
+    let repository = Repository::open(&repo_path).map_err(|_err| {
+        Error::new(
+            ErrorKind::NotInitialized,
+            "failed to access repository. Make sure to initialize a valid repository",
+        )
+    })?;
+
+    file.seek(SeekFrom::Start(0)).unwrap();
+    file.write_all(pgp::encrypt(new_credential, pub_key)?.as_ref())
+        .expect("failed to write credentials");
+
+    let mut index = repository.index().map_err(|_err| {
+        Error::new(
+            ErrorKind::InsertionError,
+            "Failed to obtain repository index",
+        )
+    })?;
+
+    index
+        .add_path(&PathBuf::from(name))
+        .expect("failed to add file");
+    index.write().unwrap();
+
+    let oid = index.write_tree().unwrap();
+    let signature = Signature::now("rspass", "rspass@rspass").unwrap();
+    let tree = repository.find_tree(oid).unwrap();
+
+    let parent_commit = match repository.head() {
+        Ok(head) => head.peel_to_commit().ok(),
+        Err(_) => None,
+    };
+
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &format!("update {:?}", name),
+            &tree,
+            parent_commit.iter().collect::<Vec<_>>().as_slice(),
+        )
+        .unwrap();
+
+    Ok(())
 }
