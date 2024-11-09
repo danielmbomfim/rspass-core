@@ -494,3 +494,31 @@ pub fn move_credential(target: &str, destination: &str) -> Result<()> {
 
     Ok(())
 }
+
+pub fn get_credentials(name: Option<&str>) -> Vec<String> {
+    let mut base_path = get_repo_path();
+
+    if let Some(name) = name {
+        base_path.push(name);
+    }
+
+    list_files_recursively(&base_path)
+}
+
+fn list_files_recursively(dir: &PathBuf) -> Vec<String> {
+    let mut paths = Vec::new();
+
+    if dir.is_dir() && !dir.ends_with(".git") {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                paths.extend(list_files_recursively(&path));
+            } else {
+                paths.push(path.to_str().unwrap().to_owned());
+            }
+        }
+    }
+
+    paths
+}
