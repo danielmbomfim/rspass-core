@@ -401,7 +401,7 @@ pub fn remove_credential(name: &str) -> Result<()> {
 
     index
         .remove_path(&PathBuf::from(name))
-        .expect("failed to add file");
+        .expect("failed to remove file");
     index.write().unwrap();
 
     let oid = index.write_tree().unwrap();
@@ -419,6 +419,74 @@ pub fn remove_credential(name: &str) -> Result<()> {
             &signature,
             &signature,
             &format!("remove {:?}", name),
+            &tree,
+            parent_commit.iter().collect::<Vec<_>>().as_slice(),
+        )
+        .unwrap();
+
+    Ok(())
+}
+
+pub fn move_credential(target: &str, destination: &str) -> Result<()> {
+    let repo_path = get_repo_path();
+    let target_path = repo_path.join(target);
+    let destination_path = repo_path.join(destination);
+
+    let repository = Repository::open(&repo_path).map_err(|_err| {
+        Error::new(
+            ErrorKind::NotInitialized,
+            "failed to access repository. Make sure to initialize a valid repository",
+        )
+    })?;
+
+    create_dir_all(destination_path.parent().unwrap()).map_err(|err| match err.kind() {
+        io::ErrorKind::PermissionDenied => Error::new(
+            ErrorKind::PermissionDenied,
+            "You dont have permission to create a subdirectory",
+        ),
+        io::ErrorKind::AlreadyExists => Error::new(
+            ErrorKind::AlreadyExists,
+            "A credential already exists with this name",
+        ),
+        _ => panic!("Unexpected error while creating credentials directories"),
+    })?;
+
+    fs::rename(&target_path, &destination_path).map_err(|err| match err.kind() {
+        io::ErrorKind::NotFound => Error::new(ErrorKind::NotFound, "credential not found"),
+        io::ErrorKind::PermissionDenied => Error::new(
+            ErrorKind::PermissionDenied,
+            "You dont have permission to move this credential",
+        ),
+        _ => panic!("unexpected error while moving credential"),
+    })?;
+
+    let mut index = repository
+        .index()
+        .map_err(|_err| Error::new(ErrorKind::RemovalError, "Failed to obtain repository index"))?;
+
+    index
+        .add_path(&PathBuf::from(destination))
+        .expect("failed to add file");
+    index
+        .remove_path(&PathBuf::from(target))
+        .expect("failed to remove file");
+    index.write().unwrap();
+
+    let oid = index.write_tree().unwrap();
+    let signature = Signature::now("rspass", "rspass@rspass").unwrap();
+    let tree = repository.find_tree(oid).unwrap();
+
+    let parent_commit = match repository.head() {
+        Ok(head) => head.peel_to_commit().ok(),
+        Err(_) => None,
+    };
+
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &format!("move {} to {}", target, destination),
             &tree,
             parent_commit.iter().collect::<Vec<_>>().as_slice(),
         )
