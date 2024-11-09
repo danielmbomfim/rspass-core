@@ -6,7 +6,7 @@ use rand::prelude::SliceRandom;
 use rand::seq::IteratorRandom;
 use rand::Rng;
 use std::collections::HashMap;
-use std::fs::{create_dir, create_dir_all, OpenOptions};
+use std::fs::{self, create_dir, create_dir_all, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::{fs::File, io};
@@ -20,6 +20,8 @@ pub enum ErrorKind {
     NotInitialized,
     BadConfig,
     InsertionError,
+    EditionError,
+    RemovalError,
     AlreadyExists,
     EncryptationError,
     DecryptationError,
@@ -186,6 +188,10 @@ pub fn insert_credential(
             ErrorKind::PermissionDenied,
             "You dont have permission to create a subdirectory",
         ),
+        io::ErrorKind::AlreadyExists => Error::new(
+            ErrorKind::AlreadyExists,
+            "A credential already exists with this name",
+        ),
         _ => panic!("Unexpected error while creating credentials directories"),
     })?;
 
@@ -336,12 +342,9 @@ pub fn edit_credential(
     file.write_all(pgp::encrypt(new_credential, pub_key)?.as_ref())
         .expect("failed to write credentials");
 
-    let mut index = repository.index().map_err(|_err| {
-        Error::new(
-            ErrorKind::InsertionError,
-            "Failed to obtain repository index",
-        )
-    })?;
+    let mut index = repository
+        .index()
+        .map_err(|_err| Error::new(ErrorKind::EditionError, "Failed to obtain repository index"))?;
 
     index
         .add_path(&PathBuf::from(name))
@@ -363,6 +366,59 @@ pub fn edit_credential(
             &signature,
             &signature,
             &format!("update {:?}", name),
+            &tree,
+            parent_commit.iter().collect::<Vec<_>>().as_slice(),
+        )
+        .unwrap();
+
+    Ok(())
+}
+
+pub fn remove_credential(name: &str) -> Result<()> {
+    let repo_path = get_repo_path();
+    let file_path = repo_path.join(name);
+
+    let repository = Repository::open(&repo_path).map_err(|_err| {
+        Error::new(
+            ErrorKind::NotInitialized,
+            "failed to access repository. Make sure to initialize a valid repository",
+        )
+    })?;
+
+    fs::remove_file(file_path).map_err(|err| match err.kind() {
+        io::ErrorKind::NotFound => Error::new(ErrorKind::NotFound, "credential not found"),
+        io::ErrorKind::PermissionDenied => Error::new(
+            ErrorKind::PermissionDenied,
+            "You dont have permission to remove this credential",
+        ),
+        io::ErrorKind::InvalidInput => Error::new(ErrorKind::NotFound, "credential not found"),
+        _ => panic!("unexpected error while removing credential"),
+    })?;
+
+    let mut index = repository
+        .index()
+        .map_err(|_err| Error::new(ErrorKind::RemovalError, "Failed to obtain repository index"))?;
+
+    index
+        .remove_path(&PathBuf::from(name))
+        .expect("failed to add file");
+    index.write().unwrap();
+
+    let oid = index.write_tree().unwrap();
+    let signature = Signature::now("rspass", "rspass@rspass").unwrap();
+    let tree = repository.find_tree(oid).unwrap();
+
+    let parent_commit = match repository.head() {
+        Ok(head) => head.peel_to_commit().ok(),
+        Err(_) => None,
+    };
+
+    repository
+        .commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            &format!("remove {:?}", name),
             &tree,
             parent_commit.iter().collect::<Vec<_>>().as_slice(),
         )
