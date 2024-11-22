@@ -45,7 +45,7 @@ impl Error {
 
 type Result<T> = std::result::Result<T, Error>;
 
-fn get_repo_path() -> PathBuf {
+pub fn get_repo_path() -> PathBuf {
     home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(if cfg!(target_os = "linux") {
@@ -55,7 +55,7 @@ fn get_repo_path() -> PathBuf {
         })
 }
 
-fn get_config_path() -> PathBuf {
+pub fn get_config_path() -> PathBuf {
     config_dir().unwrap().join("rspass")
 }
 
@@ -493,32 +493,4 @@ pub fn move_credential(target: &str, destination: &str) -> Result<()> {
         .unwrap();
 
     Ok(())
-}
-
-pub fn get_credentials(name: Option<&str>) -> Vec<String> {
-    let mut base_path = get_repo_path();
-
-    if let Some(name) = name {
-        base_path.push(name);
-    }
-
-    list_files_recursively(&base_path)
-}
-
-fn list_files_recursively(dir: &PathBuf) -> Vec<String> {
-    let mut paths = Vec::new();
-
-    if dir.is_dir() && !dir.ends_with(".git") {
-        for entry in fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.is_dir() {
-                paths.extend(list_files_recursively(&path));
-            } else {
-                paths.push(path.to_str().unwrap().to_owned());
-            }
-        }
-    }
-
-    paths
 }
