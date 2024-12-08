@@ -1,5 +1,5 @@
-use dirs::{config_dir, home_dir};
-use git2::{Repository, Signature};
+use dirs::config_dir;
+use git::{commit_changes, open_repository};
 use pgp::{decrypt, recover_private_key, recover_rsa_pub_key, Keys};
 use rand::distributions::Alphanumeric;
 use rand::prelude::SliceRandom;
@@ -11,6 +11,9 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::{fs::File, io};
 
+pub use git::{get_repo_path, initialize_repository};
+
+mod git;
 mod pgp;
 
 #[derive(Debug)]
@@ -44,16 +47,6 @@ impl Error {
 }
 
 type Result<T> = std::result::Result<T, Error>;
-
-pub fn get_repo_path() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(if cfg!(target_os = "linux") {
-            ".local/share/rspass"
-        } else {
-            "rspass"
-        })
-}
 
 pub fn get_config_path() -> PathBuf {
     config_dir().unwrap().join("rspass")
@@ -147,40 +140,13 @@ pub fn generate_keys(name: &str, email: &str, password: &str) -> Result<String> 
     Ok(config_dir.to_str().unwrap().to_owned())
 }
 
-pub fn initialize_repository() -> Result<String> {
-    let folder = get_repo_path();
-
-    Repository::init(&folder).map_err(|_err| {
-        Error::new(
-            ErrorKind::InitializationError,
-            "failed to initialize repository",
-        )
-    })?;
-
-    Ok(folder.to_str().unwrap().to_owned())
-}
-
 pub fn insert_credential(
     name: &str,
     password: &str,
     metadata: Option<Vec<(String, String)>>,
 ) -> Result<()> {
     let repo_path = get_repo_path();
-
-    let repository = Repository::open(&repo_path).map_err(|_err| {
-        Error::new(
-            ErrorKind::NotInitialized,
-            "failed to access repository. Make sure to initialize a valid repository",
-        )
-    })?;
-
-    let mut index = repository.index().map_err(|_err| {
-        Error::new(
-            ErrorKind::InsertionError,
-            "Failed to obtain repository index",
-        )
-    })?;
-
+    let repository = open_repository(&repo_path)?;
     let file_path = repo_path.join(name);
 
     create_dir_all(file_path.as_path().parent().unwrap()).map_err(|err| match err.kind() {
@@ -221,32 +187,12 @@ pub fn insert_credential(
     file.write_all(pgp::encrypt(file_data, pub_key)?.as_ref())
         .expect("failed to write credentials");
 
-    index
-        .add_path(&PathBuf::from(name))
-        .expect("failed to add file");
-    index.write().unwrap();
-
-    let oid = index.write_tree().unwrap();
-    let signature = Signature::now("rspass", "rspass@rspass").unwrap();
-    let tree = repository.find_tree(oid).unwrap();
-
-    let parent_commit = match repository.head() {
-        Ok(head) => head.peel_to_commit().ok(),
-        Err(_) => None,
-    };
-
-    repository
-        .commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            &format!("add {:?}", name),
-            &tree,
-            parent_commit.iter().collect::<Vec<_>>().as_slice(),
-        )
-        .unwrap();
-
-    Ok(())
+    commit_changes(
+        &repository,
+        Some(vec![name]),
+        None,
+        &format!("add {:?}", name),
+    )
 }
 
 pub fn get_credential(name: &str, password: &str, full: bool) -> Result<String> {
@@ -331,59 +277,23 @@ pub fn edit_credential(
         new_credential.push_str(&format!("\n{}={}", key, value));
     });
 
-    let repository = Repository::open(&repo_path).map_err(|_err| {
-        Error::new(
-            ErrorKind::NotInitialized,
-            "failed to access repository. Make sure to initialize a valid repository",
-        )
-    })?;
-
     file.seek(SeekFrom::Start(0)).unwrap();
     file.write_all(pgp::encrypt(new_credential, pub_key)?.as_ref())
         .expect("failed to write credentials");
 
-    let mut index = repository
-        .index()
-        .map_err(|_err| Error::new(ErrorKind::EditionError, "Failed to obtain repository index"))?;
+    let repository = open_repository(&repo_path)?;
 
-    index
-        .add_path(&PathBuf::from(name))
-        .expect("failed to add file");
-    index.write().unwrap();
-
-    let oid = index.write_tree().unwrap();
-    let signature = Signature::now("rspass", "rspass@rspass").unwrap();
-    let tree = repository.find_tree(oid).unwrap();
-
-    let parent_commit = match repository.head() {
-        Ok(head) => head.peel_to_commit().ok(),
-        Err(_) => None,
-    };
-
-    repository
-        .commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            &format!("update {:?}", name),
-            &tree,
-            parent_commit.iter().collect::<Vec<_>>().as_slice(),
-        )
-        .unwrap();
-
-    Ok(())
+    commit_changes(
+        &repository,
+        Some(vec![name]),
+        None,
+        &format!("update {:?}", name),
+    )
 }
 
 pub fn remove_credential(name: &str) -> Result<()> {
     let repo_path = get_repo_path();
     let file_path = repo_path.join(name);
-
-    let repository = Repository::open(&repo_path).map_err(|_err| {
-        Error::new(
-            ErrorKind::NotInitialized,
-            "failed to access repository. Make sure to initialize a valid repository",
-        )
-    })?;
 
     fs::remove_file(file_path).map_err(|err| match err.kind() {
         io::ErrorKind::NotFound => Error::new(ErrorKind::NotFound, "credential not found"),
@@ -395,49 +305,20 @@ pub fn remove_credential(name: &str) -> Result<()> {
         _ => panic!("unexpected error while removing credential"),
     })?;
 
-    let mut index = repository
-        .index()
-        .map_err(|_err| Error::new(ErrorKind::RemovalError, "Failed to obtain repository index"))?;
+    let repository = open_repository(&repo_path)?;
 
-    index
-        .remove_path(&PathBuf::from(name))
-        .expect("failed to remove file");
-    index.write().unwrap();
-
-    let oid = index.write_tree().unwrap();
-    let signature = Signature::now("rspass", "rspass@rspass").unwrap();
-    let tree = repository.find_tree(oid).unwrap();
-
-    let parent_commit = match repository.head() {
-        Ok(head) => head.peel_to_commit().ok(),
-        Err(_) => None,
-    };
-
-    repository
-        .commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            &format!("remove {:?}", name),
-            &tree,
-            parent_commit.iter().collect::<Vec<_>>().as_slice(),
-        )
-        .unwrap();
-
-    Ok(())
+    commit_changes(
+        &repository,
+        None,
+        Some(vec![name]),
+        &format!("remove {:?}", name),
+    )
 }
 
 pub fn move_credential(target: &str, destination: &str) -> Result<()> {
     let repo_path = get_repo_path();
     let target_path = repo_path.join(target);
     let destination_path = repo_path.join(destination);
-
-    let repository = Repository::open(&repo_path).map_err(|_err| {
-        Error::new(
-            ErrorKind::NotInitialized,
-            "failed to access repository. Make sure to initialize a valid repository",
-        )
-    })?;
 
     create_dir_all(destination_path.parent().unwrap()).map_err(|err| match err.kind() {
         io::ErrorKind::PermissionDenied => Error::new(
@@ -460,37 +341,12 @@ pub fn move_credential(target: &str, destination: &str) -> Result<()> {
         _ => panic!("unexpected error while moving credential"),
     })?;
 
-    let mut index = repository
-        .index()
-        .map_err(|_err| Error::new(ErrorKind::RemovalError, "Failed to obtain repository index"))?;
+    let repository = open_repository(&repo_path)?;
 
-    index
-        .add_path(&PathBuf::from(destination))
-        .expect("failed to add file");
-    index
-        .remove_path(&PathBuf::from(target))
-        .expect("failed to remove file");
-    index.write().unwrap();
-
-    let oid = index.write_tree().unwrap();
-    let signature = Signature::now("rspass", "rspass@rspass").unwrap();
-    let tree = repository.find_tree(oid).unwrap();
-
-    let parent_commit = match repository.head() {
-        Ok(head) => head.peel_to_commit().ok(),
-        Err(_) => None,
-    };
-
-    repository
-        .commit(
-            Some("HEAD"),
-            &signature,
-            &signature,
-            &format!("move {} to {}", target, destination),
-            &tree,
-            parent_commit.iter().collect::<Vec<_>>().as_slice(),
-        )
-        .unwrap();
-
-    Ok(())
+    commit_changes(
+        &repository,
+        Some(vec![destination]),
+        Some(vec![target]),
+        &format!("move {} to {}", target, destination),
+    )
 }
