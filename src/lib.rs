@@ -11,7 +11,9 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::{fs::File, io};
 
-pub use git::{get_repo_path, initialize_repository};
+pub use git::{
+    add_remote, fetch_from_remote, get_repo_path, initialize_repository, push_to_remote,
+};
 
 mod git;
 mod pgp;
@@ -19,6 +21,7 @@ mod pgp;
 #[derive(Debug)]
 pub enum ErrorKind {
     InitializationError,
+    RemoteError,
     PermissionDenied,
     NotInitialized,
     BadConfig,

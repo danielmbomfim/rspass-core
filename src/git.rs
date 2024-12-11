@@ -92,3 +92,24 @@ pub fn commit_changes(
 
     Ok(())
 }
+
+pub fn add_remote(uri: &str) -> Result<()> {
+    let repo = open_repository(&get_repo_path())?;
+
+    repo.remote("origin", uri).map_err(|_| {
+        Error::new(
+            ErrorKind::RemoteError,
+            "failed to add remote, verify the params",
+        )
+    })?;
+
+    Ok(())
+}
+
+pub fn fetch_from_remote() -> Result<()> {
+    todo!()
+}
+
+pub fn push_to_remote() -> Result<()> {
+    todo!()
+}
