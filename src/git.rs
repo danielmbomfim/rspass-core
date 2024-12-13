@@ -110,6 +110,26 @@ pub fn fetch_from_remote() -> Result<()> {
     todo!()
 }
 
-pub fn push_to_remote() -> Result<()> {
-    todo!()
+pub fn push_to_remote(username: &str, token: &str) -> Result<()> {
+    let repo = open_repository(&get_repo_path())?;
+
+    let mut remote = repo
+        .find_remote("origin")
+        .map_err(|_| Error::new(ErrorKind::RemoteError, "failed to find remote"))?;
+
+    let mut callbacks = git2::RemoteCallbacks::new();
+
+    callbacks.credentials(|_, _, _| git2::Cred::userpass_plaintext(username, token));
+
+    let mut push_options = git2::PushOptions::new();
+    push_options.remote_callbacks(callbacks);
+
+    remote
+        .push(
+            &["refs/heads/master:refs/heads/master"],
+            Some(&mut push_options),
+        )
+        .map_err(|_| Error::new(ErrorKind::PushError, "failed to push to remote"))?;
+
+    Ok(())
 }

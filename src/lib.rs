@@ -22,6 +22,7 @@ mod pgp;
 pub enum ErrorKind {
     InitializationError,
     RemoteError,
+    PushError,
     PermissionDenied,
     NotInitialized,
     BadConfig,
