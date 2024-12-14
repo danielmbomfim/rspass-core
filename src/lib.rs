@@ -23,6 +23,7 @@ pub enum ErrorKind {
     InitializationError,
     RemoteError,
     PushError,
+    FetchError,
     PermissionDenied,
     NotInitialized,
     BadConfig,

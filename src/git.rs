@@ -106,8 +106,69 @@ pub fn add_remote(uri: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn fetch_from_remote() -> Result<()> {
-    todo!()
+pub fn fetch_from_remote(username: &str, token: &str) -> Result<()> {
+    let repo = open_repository(&get_repo_path())?;
+
+    let mut remote = repo
+        .find_remote("origin")
+        .map_err(|_| Error::new(ErrorKind::RemoteError, "failed to find remote"))?;
+
+    let mut callbacks = git2::RemoteCallbacks::new();
+
+    callbacks.credentials(|_, _, _| git2::Cred::userpass_plaintext(username, token));
+
+    let mut fetch_options = git2::FetchOptions::new();
+    fetch_options.remote_callbacks(callbacks);
+
+    remote
+        .fetch(&["master"], Some(&mut fetch_options), None)
+        .map_err(|_| Error::new(ErrorKind::FetchError, "failed to fetch master from origin"))?;
+
+    let local_branch = repo.find_branch("master", git2::BranchType::Local).unwrap();
+    let local_oid = local_branch.get().target().unwrap();
+
+    let remote_branch_ref = format!("refs/remotes/origin/{}", "master");
+    let remote_branch = repo
+        .find_reference(&remote_branch_ref)
+        .map_err(|_| Error::new(ErrorKind::FetchError, "failed to fetch master from origin"))?;
+    let remote_oid = remote_branch.target().unwrap();
+
+    if local_oid != remote_oid {
+        let annotated_commit = repo
+            .reference_to_annotated_commit(&remote_branch)
+            .map_err(|_| Error::new(ErrorKind::FetchError, "failed to fetch master from origin"))?;
+        let (analysis, _) = repo
+            .merge_analysis(&[&annotated_commit])
+            .map_err(|_| Error::new(ErrorKind::FetchError, "failed to fetch master from origin"))?;
+
+        if analysis.is_fast_forward() {
+            let mut reference = repo
+                .find_reference(&format!("refs/heads/{}", "master"))
+                .map_err(|_| {
+                    Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
+                })?;
+            reference
+                .set_target(remote_oid, "Fast-forward")
+                .map_err(|_| {
+                    Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
+                })?;
+            repo.set_head(&format!("refs/heads/{}", "master"))
+                .map_err(|_| {
+                    Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
+                })?;
+            repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
+                .map_err(|_| {
+                    Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
+                })?;
+        } else if analysis.is_normal() {
+            repo.merge(&[&annotated_commit], None, None).map_err(|_| {
+                Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
+            })?;
+        } else {
+            println!("No merge necessary");
+        }
+    }
+    Ok(())
 }
 
 pub fn push_to_remote(username: &str, token: &str) -> Result<()> {
