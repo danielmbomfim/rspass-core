@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
+use crate::config::get_home_dir;
+
 use super::{Error, ErrorKind, Result};
-use dirs::home_dir;
 use git2::{Index, Repository, Signature};
 
 pub fn get_repo_path() -> PathBuf {
-    home_dir()
+    get_home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(if cfg!(target_os = "linux") {
             ".local/share/rspass"

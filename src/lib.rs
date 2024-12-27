@@ -1,4 +1,4 @@
-use dirs::config_dir;
+use config::get_config_dir;
 use git::{commit_changes, open_repository};
 use pgp::{decrypt, recover_private_key, recover_rsa_pub_key, Keys};
 use rand::distributions::Alphanumeric;
@@ -15,6 +15,9 @@ pub use git::{
     add_remote, fetch_from_remote, get_repo_path, initialize_repository, push_to_remote,
 };
 
+pub use config::{set_config_dir, set_home_dir};
+
+mod config;
 mod git;
 mod pgp;
 
@@ -34,6 +37,7 @@ pub enum ErrorKind {
     EncryptationError,
     DecryptationError,
     NotFound,
+    ConfigAlreadySet,
 }
 
 #[derive(Debug)]
@@ -51,10 +55,12 @@ impl Error {
     }
 }
 
-type Result<T> = std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 pub fn get_config_path() -> PathBuf {
-    config_dir().unwrap().join("rspass")
+    get_config_dir()
+        .expect("config_dir should already be defined")
+        .join("rspass")
 }
 
 fn get_credential_file(path: &PathBuf, write_mode: bool) -> Result<File> {
