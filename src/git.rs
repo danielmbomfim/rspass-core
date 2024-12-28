@@ -18,10 +18,10 @@ pub fn get_repo_path() -> PathBuf {
 pub fn initialize_repository() -> Result<String> {
     let folder = get_repo_path();
 
-    Repository::init(&folder).map_err(|_err| {
+    Repository::init(&folder).map_err(|err| {
         Error::new(
             ErrorKind::InitializationError,
-            "failed to initialize repository",
+            format!("failed to initialize repository. {}", err.message()),
         )
     })?;
 
@@ -29,19 +29,22 @@ pub fn initialize_repository() -> Result<String> {
 }
 
 pub(crate) fn open_repository(path: &PathBuf) -> Result<Repository> {
-    Repository::open(path).map_err(|_err| {
+    Repository::open(path).map_err(|err| {
         Error::new(
             ErrorKind::NotInitialized,
-            "failed to access repository. Make sure to initialize a valid repository",
+            format!(
+                "failed to access repository. Make sure to initialize a valid repository. {}",
+                err.message()
+            ),
         )
     })
 }
 
 pub(crate) fn get_repo_index(repo: &Repository) -> Result<Index> {
-    repo.index().map_err(|_err| {
+    repo.index().map_err(|err| {
         Error::new(
             ErrorKind::InsertionError,
-            "Failed to obtain repository index",
+            format!("Failed to obtain repository index. {}", err.message()),
         )
     })
 }
@@ -97,10 +100,10 @@ pub fn commit_changes(
 pub fn add_remote(uri: &str) -> Result<()> {
     let repo = open_repository(&get_repo_path())?;
 
-    repo.remote("origin", uri).map_err(|_| {
+    repo.remote("origin", uri).map_err(|err| {
         Error::new(
             ErrorKind::RemoteError,
-            "failed to add remote, verify the params",
+            format!("failed to add remote. {}", err.message()),
         )
     })?;
 
@@ -123,48 +126,80 @@ pub fn fetch_from_remote(username: &str, token: &str) -> Result<()> {
 
     remote
         .fetch(&["master"], Some(&mut fetch_options), None)
-        .map_err(|_| Error::new(ErrorKind::FetchError, "failed to fetch master from origin"))?;
+        .map_err(|err| {
+            Error::new(
+                ErrorKind::FetchError,
+                format!("failed to fetch master from origin. {}", err.message()),
+            )
+        })?;
 
     let local_branch = repo.find_branch("master", git2::BranchType::Local).unwrap();
     let local_oid = local_branch.get().target().unwrap();
 
     let remote_branch_ref = format!("refs/remotes/origin/{}", "master");
-    let remote_branch = repo
-        .find_reference(&remote_branch_ref)
-        .map_err(|_| Error::new(ErrorKind::FetchError, "failed to fetch master from origin"))?;
+    let remote_branch = repo.find_reference(&remote_branch_ref).map_err(|err| {
+        Error::new(
+            ErrorKind::FetchError,
+            format!("failed to fetch master from origin. {}", err.message()),
+        )
+    })?;
     let remote_oid = remote_branch.target().unwrap();
 
     if local_oid != remote_oid {
-        let annotated_commit = repo
-            .reference_to_annotated_commit(&remote_branch)
-            .map_err(|_| Error::new(ErrorKind::FetchError, "failed to fetch master from origin"))?;
-        let (analysis, _) = repo
-            .merge_analysis(&[&annotated_commit])
-            .map_err(|_| Error::new(ErrorKind::FetchError, "failed to fetch master from origin"))?;
+        let annotated_commit =
+            repo.reference_to_annotated_commit(&remote_branch)
+                .map_err(|err| {
+                    Error::new(
+                        ErrorKind::FetchError,
+                        format!("failed to fetch master from origin. {}", err.message()),
+                    )
+                })?;
+        let (analysis, _) = repo.merge_analysis(&[&annotated_commit]).map_err(|err| {
+            Error::new(
+                ErrorKind::FetchError,
+                format!("failed to fetch master from origin. {}", err.message()),
+            )
+        })?;
 
         if analysis.is_fast_forward() {
             let mut reference = repo
                 .find_reference(&format!("refs/heads/{}", "master"))
-                .map_err(|_| {
-                    Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
+                .map_err(|err| {
+                    Error::new(
+                        ErrorKind::FetchError,
+                        format!("failed to fetch master from origin. {}", err.message()),
+                    )
                 })?;
             reference
                 .set_target(remote_oid, "Fast-forward")
-                .map_err(|_| {
-                    Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
+                .map_err(|err| {
+                    Error::new(
+                        ErrorKind::FetchError,
+                        format!("failed to fetch master from origin. {}", err.message()),
+                    )
                 })?;
             repo.set_head(&format!("refs/heads/{}", "master"))
-                .map_err(|_| {
-                    Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
+                .map_err(|err| {
+                    Error::new(
+                        ErrorKind::FetchError,
+                        format!("failed to fetch master from origin. {}", err.message()),
+                    )
                 })?;
             repo.checkout_head(Some(git2::build::CheckoutBuilder::default().force()))
-                .map_err(|_| {
-                    Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
+                .map_err(|err| {
+                    Error::new(
+                        ErrorKind::FetchError,
+                        format!("failed to fetch master from origin. {}", err.message()),
+                    )
                 })?;
         } else if analysis.is_normal() {
-            repo.merge(&[&annotated_commit], None, None).map_err(|_| {
-                Error::new(ErrorKind::FetchError, "failed to fetch master from origin")
-            })?;
+            repo.merge(&[&annotated_commit], None, None)
+                .map_err(|err| {
+                    Error::new(
+                        ErrorKind::FetchError,
+                        format!("failed to fetch master from origin. {}", err.message()),
+                    )
+                })?;
         } else {
             println!("No merge necessary");
         }
@@ -191,7 +226,12 @@ pub fn push_to_remote(username: &str, token: &str) -> Result<()> {
             &["refs/heads/master:refs/heads/master"],
             Some(&mut push_options),
         )
-        .map_err(|_| Error::new(ErrorKind::PushError, "failed to push to remote"))?;
+        .map_err(|err| {
+            Error::new(
+                ErrorKind::PushError,
+                format!("failed to push to remote. {}", err.message()),
+            )
+        })?;
 
     Ok(())
 }
