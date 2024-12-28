@@ -6,8 +6,8 @@ use dirs::{config_dir, home_dir};
 
 use super::{Error, ErrorKind, Result};
 
-const CONFIG_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
-const HOME_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+static CONFIG_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+static HOME_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
 
 pub fn get_home_dir() -> Option<PathBuf> {
     #[cfg(feature = "dirs")]
